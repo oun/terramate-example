@@ -1,0 +1,67 @@
+name: Apply
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  preview:
+    name: Apply
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install tools using asdf
+        uses: asdf-vm/actions/install@v2.2.0
+
+      - name: Config Terraform plugin cache
+        run: |
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> "$GITHUB_ENV"
+
+      - name: Cache Terraform
+        uses: actions/cache@v3
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-
+
+      - name: List changed stacks
+        id: list
+        run: |
+          echo "stdout<<STDOUT" >>$GITHUB_OUTPUT
+          terramate list --changed >>$GITHUB_OUTPUT
+          EXIT_CODE=$?
+          echo "STDOUT" >>$GITHUB_OUTPUT
+          exit ${EXIT_CODE}
+
+      - name: Authen Google
+        id: auth
+        uses: 'google-github-actions/auth@v1'
+        with:
+          token_format: 'access_token'
+          workload_identity_provider: ${{ secrets.PROVIDER_NAME }}
+          service_account: ${{ secrets.SA_EMAIL }}
+
+      - name: Run Terraform init on changed stacks
+        if: steps.list.outputs.stdout
+        id: init
+        run: |
+          terramate run --changed -- terraform init
+
+      - name: Run Terraform apply on changed stacks
+        if: steps.list.outputs.stdout
+        id: apply
+        run: |
+          terramate run --changed -- terraform apply -input=false -auto-approve
