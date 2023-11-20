@@ -1,0 +1,92 @@
+name: Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  preview:
+    name: Plan
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install tools using asdf
+        uses: asdf-vm/actions/install@v2.2.0
+
+      - name: Config Terraform plugin cache
+        run: |
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> "$GITHUB_ENV"
+
+      - name: Cache Terraform
+        uses: actions/cache@v3
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-
+
+      - uses: pre-commit/action@v3.0.0
+
+      - name: List changed stacks
+        id: list
+        run: |
+          echo "stdout<<STDOUT" >>$GITHUB_OUTPUT
+          terramate list --changed >>$GITHUB_OUTPUT
+          EXIT_CODE=$?
+          echo "STDOUT" >>$GITHUB_OUTPUT
+          exit ${EXIT_CODE}
+
+      - name: Authen Google
+        id: auth
+        uses: 'google-github-actions/auth@v1'
+        with:
+          token_format: 'access_token'
+          workload_identity_provider: ${{ secrets.PROVIDER_NAME }}
+          service_account: ${{ secrets.SA_EMAIL }}
+
+      - name: Create Terraform plan on changed stacks
+        if: steps.list.outputs.stdout
+        run: |
+          terramate run --changed -- terraform init
+          terramate run --changed -- terraform plan -out out.tfplan
+
+      - name: Generate preview comment
+        if: steps.list.outputs.stdout
+        id: comment
+        run: |
+          echo >>pr-comment.txt "### List of Changed Stacks"
+          echo >>pr-comment.txt
+          echo >>pr-comment.txt '```bash'
+          echo >>pr-comment.txt "${{ steps.list.outputs.stdout }}"
+          echo >>pr-comment.txt '```'
+          echo >>pr-comment.txt
+          echo >>pr-comment.txt "#### Terraform Plan"
+          echo >>pr-comment.txt
+          echo >>pr-comment.txt '```terraform'
+          terramate run --changed -- terraform show -no-color out.tfplan 2>&1 | dd bs=1024 count=248 >>pr-comment.txt
+          echo >>pr-comment.txt '```'
+          cat pr-comment.txt >>$GITHUB_STEP_SUMMARY
+
+      - name: Inform about no changed stacks
+        if: (!steps.list.outputs.stdout)
+        run: |
+          echo >>pr-comment.txt '### No changed stacks.'
+          cat pr-comment.txt >>$GITHUB_STEP_SUMMARY
+
+      - name: Publish plans for changed stacks
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: terraform-plan
+          path: pr-comment.txt
