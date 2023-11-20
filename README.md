@@ -69,9 +69,14 @@ gcloud iam service-accounts add-iam-policy-binding "${SA_NAME}@${PROJECT_ID}.iam
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-pool/attribute.repository/${REPO_OWNER}/${REPO_NAME}"
 ```
 
+```
+gcloud services enable iamcredentials.googleapis.com \
+  --project="${PROJECT_ID}"
+```
+
 Add the following Github Actions secrets in your repository settings.
 
 ```
-PROVIDER_NAME: github-oidc
+PROVIDER_NAME: projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
 SA_EMAIL: ${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com
 ```
